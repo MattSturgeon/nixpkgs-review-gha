@@ -69,6 +69,21 @@ on:
         default: false
 
 jobs:
+  token:
+    name: GitHub App token
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    if: ${{ vars.APP_ID }}
+    outputs:
+      token: ${{ steps.app-token.outputs.token }}
+    steps:
+      - name: Create GitHub App token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
   review:
     strategy:
       fail-fast: false
@@ -276,11 +291,28 @@ jobs:
 
   post-result:
     runs-on: ubuntu-latest
-    needs: [report]
+    needs:
+      - token
+      - report
     if: ${{ inputs.post-result || inputs.approve-on-success }}
     environment: post-result
 
     steps:
+      - name: Set GH_TOKEN
+        env:
+          PAT_TOKEN: ${{ secrets.GH_TOKEN }}
+          APP_TOKEN: ${{ needs.token.outputs.token }}
+        run: |
+          GH_TOKEN=
+          if [[ -n "$APP_TOKEN" ]]; then
+            GH_TOKEN="$APP_TOKEN"
+          elif [[ -n "$PAT_TOKEN" ]]; then
+            GH_TOKEN="$PAT_TOKEN"
+          fi
+          if [[ -n "$GH_TOKEN" ]]; then
+            echo "GH_TOKEN=$GH_TOKEN" >> "$GITHUB_ENV"
+          fi
+
       - name: fetch report
         run: echo ${REPORT} | base64 -d > report.md
         env:
@@ -292,8 +324,6 @@ jobs:
           if [[ -n "$GH_TOKEN" ]]; then
             gh pr -R NixOS/nixpkgs comment ${PR_NUMBER} -F report.md
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: approve pull request
         if: ${{ inputs.approve-on-success && needs.report.outputs.success == 'true' }}
@@ -301,5 +331,3 @@ jobs:
           if [[ -n "$GH_TOKEN" ]]; then
             gh pr -R NixOS/nixpkgs review ${PR_NUMBER} --approve -b "Approved automatically following the successful run of \`nixpkgs-review\`." || true
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
